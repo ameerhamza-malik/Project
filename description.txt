@@ -1,0 +1,79 @@
+Optimal Image preprocessing on “The ISIC 2020 Challenge Dataset” for Skin Lesion
+
+Analysis Towards Melanoma(Cancer) Detection using OpenCL
+
+Objective:
+The objective of this assignment is to provide hands-on experience with parallel and
+distributed computing using OpenCL by converting a dataset of colored images of skin lesions
+into greyscale images.
+The ISIC 2020 Challenge Dataset:
+The ISIC dataset is vital for dermatology and medical image analysis, providing a diverse
+collection of high-quality skin lesion images. It supports the development of diagnostic
+systems, segmentation algorithms, and deep learning models for automated lesion detection
+and classification. By aiding early skin cancer detection and diagnosis, the dataset significantly
+improves patient outcomes globally. Its accessibility and breadth make it indispensable for
+advancing research in dermatology, oncology, and medical imaging.
+Converting the ISIC dataset to greyscale images simplifies image representation, aiding
+analysis and processing such as lesion segmentation See Figure 1. Grayscale conversion
+reduces complexity by removing color information, enhancing computational efficiency and
+facilitating tasks like lesion detection.
+
+The dataset contains dermoscopic training images of unique benign and malignant skin
+lesions from over 2,000 patients. Each image is associated with one of these individuals using
+a unique patient identifier. For this assignment you are only required to use the Test Set
+available at containing 10,982 JPEG images of different sizes:
+https://isic-challenge-data.s3.amazonaws.com/2020/ISIC_2020_Test_JPEG.zip
+
+Problem Description:
+You are provided with a dataset of colored images of skin lesions in various JPEG format. The
+task is to convert these colored images to grayscale images using OpenCL parallel
+computing.
+
+Greyscale conversion involves transforming each pixel of the image from its RGB (Red,
+Green, Blue) representation to a single intensity value representing the luminance.
+Instructions:
+The detailed requirements are mentioned in the sections provided below:
+Setup Environment:
+Install necessary OpenCL SDK and drivers on your machine. Installation instructions
+and tutorial was already provided to you on GCR. Ensure that you have access to a GPU that
+supports OpenCL for optimal performance.
+Dataset Preparation:
+Download the metnioed dataset of colored images of skin lesions. Familiarise yourself
+with the dataset structure and image formats. For simplification only the JPEG format is
+selected.
+OpenCL Implementation:
+Write OpenCL kernels to perform the conversion of colored images to grayscale
+images. Ensure that your kernels can handle images of varying sizes. Implement efficient
+memory allocation and data transfer strategies for optimal performance.
+Image Processing:
+Load each colored image from the dataset into memory. Apply the OpenCL kernel to
+convert the colored image to greyscale. Save the resulting greyscale images to the disk.
+Documentation:
+Prepare a brief report documenting your implementation approach, including:
+● Description of host program, including configuration steps and strategy to handle
+complete dataset.
+● Description of the greyscale conversion algorithms used and the thresholds selected
+for greyscale value assignment. Along with the explanation of the OpenCL kernel
+design.
+● Also, Include five (5) random images from the original dataset of colored images along
+with the generated grayscale images.
+Submission Guidelines:
+Submit the Zip Archive including,
+1. Your implementation code, including the Host Code (C language), OpenCL
+Kernal Code.
+2. Documentation report in PDF format.
+
+Note:
+1. Plagiarism will not be tolerated. Ensure that your implementation is original and
+properly cited if referencing external resources.
+2. Understanding the assignment is also part of the assignment. You may make any
+assumption as long as it does not contradict with the provided instructions.
+3. Late submission will not be accepted.
+
+Evaluation Criteria:
+● Correctness of the greyscale conversion and implementations.
+● Clarity of the documentation report.
+This assignment aims to provide you with practical experience of OpenCL using a very simple
+real-world image processing task.
+
+Good luck!
