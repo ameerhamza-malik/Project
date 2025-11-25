@@ -22,6 +22,7 @@
 #include <sys/types.h>
 
 #define MAX_SOURCE_SIZE (0x100000)
+#define BATCH_SIZE 8
 
 // Function to load OpenCL kernel source
 char* load_kernel_source(const char* filename) {
@@ -41,6 +42,113 @@ void check_error(cl_int err, const char* operation) {
     if (err != CL_SUCCESS) {
         fprintf(stderr, "Error during %s: %d\n", operation, err);
         exit(1);
+    }
+}
+
+typedef struct {
+    char input_path[512];
+    char output_path[512];
+    unsigned char* rgba_data;
+    unsigned char* gray_data;
+    cl_mem input_mem_obj;
+    cl_mem output_mem_obj;
+    cl_event kernel_event;
+    cl_event read_event;
+    size_t image_size;
+    size_t gray_size;
+    int width;
+    int height;
+} ImageJob;
+
+size_t adjust_global_size(size_t total_pixels, size_t local_item_size) {
+    if (total_pixels == 0) {
+        return 0;
+    }
+    if (local_item_size == 0) {
+        return total_pixels;
+    }
+    size_t remainder = total_pixels % local_item_size;
+    if (remainder == 0) {
+        return total_pixels;
+    }
+    return total_pixels + (local_item_size - remainder);
+}
+
+void cleanup_job(ImageJob* job) {
+    if (job->rgba_data) {
+        stbi_image_free(job->rgba_data);
+        job->rgba_data = NULL;
+    }
+    if (job->gray_data) {
+        free(job->gray_data);
+        job->gray_data = NULL;
+    }
+    if (job->input_mem_obj) {
+        clReleaseMemObject(job->input_mem_obj);
+        job->input_mem_obj = NULL;
+    }
+    if (job->output_mem_obj) {
+        clReleaseMemObject(job->output_mem_obj);
+        job->output_mem_obj = NULL;
+    }
+    if (job->kernel_event) {
+        clReleaseEvent(job->kernel_event);
+        job->kernel_event = NULL;
+    }
+    if (job->read_event) {
+        clReleaseEvent(job->read_event);
+        job->read_event = NULL;
+    }
+}
+
+int has_supported_extension(const char* filepath) {
+    const char* extensions[] = {".jpg", ".JPG", ".jpeg", ".JPEG"};
+    size_t ext_count = sizeof(extensions) / sizeof(extensions[0]);
+    for (size_t i = 0; i < ext_count; ++i) {
+        if (strstr(filepath, extensions[i]) != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void process_batch(ImageJob* batch, int batch_size, cl_context context, cl_command_queue command_queue, cl_kernel kernel) {
+    const size_t local_item_size = 64;
+
+    for (int i = 0; i < batch_size; ++i) {
+        ImageJob* job = &batch[i];
+        cl_int ret;
+
+        job->input_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, job->image_size, job->rgba_data, &ret);
+        check_error(ret, "clCreateBuffer(input)");
+
+        job->output_mem_obj = clCreateBuffer(context, CL_MEM_WRITE_ONLY, job->gray_size, NULL, &ret);
+        check_error(ret, "clCreateBuffer(output)");
+
+        ret = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*)&job->input_mem_obj);
+        ret |= clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*)&job->output_mem_obj);
+        ret |= clSetKernelArg(kernel, 2, sizeof(int), (void*)&job->width);
+        ret |= clSetKernelArg(kernel, 3, sizeof(int), (void*)&job->height);
+        check_error(ret, "clSetKernelArg(batch)");
+
+        size_t total_pixels = (size_t)job->width * (size_t)job->height;
+        size_t global_item_size = adjust_global_size(total_pixels, local_item_size);
+
+        ret = clEnqueueNDRangeKernel(command_queue, kernel, 1, NULL, &global_item_size, &local_item_size, 0, NULL, &job->kernel_event);
+        check_error(ret, "clEnqueueNDRangeKernel(batch)");
+
+        ret = clEnqueueReadBuffer(command_queue, job->output_mem_obj, CL_FALSE, 0, job->gray_size, job->gray_data, 1, &job->kernel_event, &job->read_event);
+        check_error(ret, "clEnqueueReadBuffer(batch)");
+    }
+
+    for (int i = 0; i < batch_size; ++i) {
+        ImageJob* job = &batch[i];
+        clWaitForEvents(1, &job->read_event);
+
+        stbi_write_jpg(job->output_path, job->width, job->height, 1, job->gray_data, 100);
+        printf("Processed (batch): %s\n", job->input_path);
+
+        cleanup_job(job);
     }
 }
 
@@ -87,7 +195,7 @@ int main() {
     free(kernelSource);
 
     // 2. Process Images
-    const char* input_dir = "input_images";
+    const char* input_dir = "/home/kali/Downloads/input_images";
     const char* output_dir = "output_images";
 
     // Create output directory if it doesn't exist
@@ -110,67 +218,58 @@ int main() {
 
     printf("Processing images from %s...\n", input_dir);
 
+    ImageJob batch[BATCH_SIZE];
+    memset(batch, 0, sizeof(batch));
+    int batch_count = 0;
+
     while ((dir = readdir(d)) != NULL) {
-        if (dir->d_type == DT_REG || dir->d_type == DT_UNKNOWN) { // Regular file
+        if (dir->d_type == DT_REG || dir->d_type == DT_UNKNOWN) {
             char filepath[512];
             snprintf(filepath, sizeof(filepath), "%s/%s", input_dir, dir->d_name);
 
-            // Check extension (simple check)
-            if (strstr(filepath, ".jpg") || strstr(filepath, ".jpeg") || strstr(filepath, ".JPG")) {
-                int width, height, channels;
-                // Load as 4 channels (RGBA) to align with OpenCL vector types if desired, or just 3.
-                // Using 4 channels (RGBA) is often safer for alignment and we used uchar4 in kernel.
-                unsigned char* img_data = stbi_load(filepath, &width, &height, &channels, 4); 
-                
-                if (!img_data) {
-                    printf("Failed to load image: %s\n", filepath);
-                    continue;
-                }
+            if (!has_supported_extension(filepath)) {
+                continue;
+            }
 
-                size_t image_size = width * height * 4 * sizeof(unsigned char);
-                size_t gray_size = width * height * sizeof(unsigned char);
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            unsigned char* img_data = stbi_load(filepath, &width, &height, &channels, 4);
 
-                // Create Memory Buffers
-                cl_mem input_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, image_size, img_data, &ret);
-                cl_mem output_mem_obj = clCreateBuffer(context, CL_MEM_WRITE_ONLY, gray_size, NULL, &ret);
+            if (!img_data) {
+                printf("Failed to load image: %s\n", filepath);
+                continue;
+            }
 
-                // Set Arguments
-                ret = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*)&input_mem_obj);
-                ret |= clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*)&output_mem_obj);
-                ret |= clSetKernelArg(kernel, 2, sizeof(int), (void*)&width);
-                ret |= clSetKernelArg(kernel, 3, sizeof(int), (void*)&height);
-                check_error(ret, "clSetKernelArg");
+            ImageJob* job = &batch[batch_count];
+            memset(job, 0, sizeof(ImageJob));
+            snprintf(job->input_path, sizeof(job->input_path), "%s", dir->d_name);
+            snprintf(job->output_path, sizeof(job->output_path), "%s/%s", output_dir, dir->d_name);
+            job->rgba_data = img_data;
+            job->width = width;
+            job->height = height;
+            job->image_size = (size_t)width * (size_t)height * 4 * sizeof(unsigned char);
+            job->gray_size = (size_t)width * (size_t)height * sizeof(unsigned char);
+            job->gray_data = (unsigned char*)malloc(job->gray_size);
+            if (!job->gray_data) {
+                fprintf(stderr, "Allocation failed for %s\n", filepath);
+                stbi_image_free(job->rgba_data);
+                job->rgba_data = NULL;
+                continue;
+            }
 
-                // Execute Kernel
-                size_t global_item_size = width * height;
-                size_t local_item_size = 64; // Adjust based on device capabilities
-                // Ensure global size is multiple of local size
-                if (global_item_size % local_item_size != 0) {
-                    global_item_size = (global_item_size / local_item_size + 1) * local_item_size;
-                }
+            batch_count++;
 
-                ret = clEnqueueNDRangeKernel(command_queue, kernel, 1, NULL, &global_item_size, &local_item_size, 0, NULL, NULL);
-                check_error(ret, "clEnqueueNDRangeKernel");
-
-                // Read Result
-                unsigned char* gray_data = (unsigned char*)malloc(gray_size);
-                ret = clEnqueueReadBuffer(command_queue, output_mem_obj, CL_TRUE, 0, gray_size, gray_data, 0, NULL, NULL);
-                check_error(ret, "clEnqueueReadBuffer");
-
-                // Save Image
-                char out_filepath[512];
-                snprintf(out_filepath, sizeof(out_filepath), "%s/%s", output_dir, dir->d_name);
-                stbi_write_jpg(out_filepath, width, height, 1, gray_data, 100);
-
-                printf("Processed: %s\n", dir->d_name);
-
-                // Cleanup per image
-                stbi_image_free(img_data);
-                free(gray_data);
-                clReleaseMemObject(input_mem_obj);
-                clReleaseMemObject(output_mem_obj);
+            if (batch_count == BATCH_SIZE) {
+                process_batch(batch, batch_count, context, command_queue, kernel);
+                memset(batch, 0, sizeof(batch));
+                batch_count = 0;
             }
         }
+    }
+
+    if (batch_count > 0) {
+        process_batch(batch, batch_count, context, command_queue, kernel);
     }
     closedir(d);
 
