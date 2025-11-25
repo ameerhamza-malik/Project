@@ -195,7 +195,7 @@ int main() {
     free(kernelSource);
 
     // 2. Process Images
-    const char* input_dir = "/home/kali/Downloads/input_images";
+    const char* input_dir = "input_images";
     const char* output_dir = "output_images";
 
     // Create output directory if it doesn't exist
